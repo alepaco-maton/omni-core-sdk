@@ -1,0 +1,121 @@
+import 'dart:convert';
+
+import '../mqtt/omni_mqtt_client.dart';
+import '../capabilities/capability_registry.dart';
+import 'command_hooks.dart';
+
+/// Recibe comandos MQTT, ejecuta capacidades y publica ACK/resultado.
+class CommandDispatcher {
+  CommandDispatcher(this._mqtt, this._registry);
+
+  final OmniMqttClient _mqtt;
+  final CapabilityRegistry _registry;
+  final Set<String> _executed = {};
+
+  Future<void> start() async {
+    if (!await _mqtt.ensureConnected()) return;
+    final cmdTopic = _mqtt.topic('cmd/request');
+    final shadowTopic = _mqtt.topic('shadow/desired');
+    _mqtt.subscribe(cmdTopic, (_, payload) => _onCommand(payload));
+    _mqtt.subscribe(shadowTopic, (_, payload) => _onShadow(payload));
+  }
+
+  Future<void> stop() async {
+    _executed.clear();
+  }
+
+  Future<void> _onCommand(List<int> payload) async {
+    final body = _decode(payload);
+    if (body == null) return;
+    await _handleCommand(body);
+  }
+
+  Future<void> _onShadow(List<int> payload) async {
+    final body = _decode(payload);
+    if (body == null) return;
+    final pending = body['pending_commands'];
+    if (pending is! List) return;
+    for (final item in pending) {
+      if (item is Map<String, dynamic>) {
+        await _handleCommand(item);
+      } else if (item is Map) {
+        await _handleCommand(Map<String, dynamic>.from(item));
+      }
+    }
+  }
+
+  Future<void> _handleCommand(Map<String, dynamic> body) async {
+    final commandId = body['command_id']?.toString();
+    final capability = (body['capability'] ?? body['command_key'])?.toString();
+    if (commandId == null || capability == null) return;
+    if (_executed.contains(commandId)) {
+      await _publishResult(commandId, 'succeeded', result: {'idempotent': true});
+      return;
+    }
+
+    await _publishResult(commandId, 'acked');
+    await _publishResult(commandId, 'running');
+
+    final params = body['params'] is Map
+        ? Map<String, dynamic>.from(body['params'] as Map)
+        : <String, dynamic>{};
+
+    if (capability == 'PUBLISH_MANIFEST') {
+      await publishManifest();
+      _executed.add(commandId);
+      await _publishResult(commandId, 'succeeded', result: {'published': true});
+      return;
+    }
+
+    final res = await _registry.execute(capability, params);
+    _executed.add(commandId);
+    if (res.isOk) {
+      final value = res.when(ok: (v) => v, fail: (_) => <String, dynamic>{});
+      await _publishResult(commandId, 'succeeded', result: value);
+      final hook = onCommandSucceeded;
+      if (hook != null) {
+        try {
+          await hook(capability, value);
+        } catch (_) {}
+      }
+    } else {
+      final failure = res.when(ok: (_) => null, fail: (f) => f);
+      await _publishResult(commandId, 'failed', reason: failure?.code, error: {
+        'code': failure?.code,
+        'message': failure?.message,
+      });
+    }
+  }
+
+  Future<void> publishManifest({String? appVersion}) async {
+    final manifest = _registry.toManifest(appVersion: appVersion);
+    await _mqtt.publish(_mqtt.topic('manifest'), manifest);
+  }
+
+  Future<void> _publishResult(
+    String commandId,
+    String state, {
+    Map<String, dynamic>? result,
+    String? reason,
+    Map<String, dynamic>? error,
+  }) async {
+    await _mqtt.publish(_mqtt.topic('cmd/result'), {
+      'command_id': commandId,
+      'state': state,
+      'observed_at': DateTime.now().toUtc().toIso8601String(),
+      if (result != null) 'result': result,
+      if (reason != null) 'reason': reason,
+      if (error != null) 'error': error,
+    });
+  }
+
+  Map<String, dynamic>? _decode(List<int> payload) {
+    try {
+      final text = String.fromCharCodes(payload);
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return null;
+  }
+}

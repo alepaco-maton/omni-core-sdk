@@ -1,0 +1,76 @@
+{
+  "roots": [
+    "omni_mdm_ios"
+  ],
+  "packages": [
+    {
+      "name": "omni_mdm_ios",
+      "version": "0.1.0-m0",
+      "dependencies": [
+        "flutter",
+        "omni_mdm_platform_interface"
+      ],
+      "devDependencies": []
+    },
+    {
+      "name": "omni_mdm_platform_interface",
+      "version": "0.1.0-m0",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "flutter",
+      "version": "0.0.0",
+      "dependencies": [
+        "characters",
+        "collection",
+        "material_color_utilities",
+        "meta",
+        "sky_engine",
+        "vector_math"
+      ]
+    },
+    {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
+      "name": "sky_engine",
+      "version": "0.0.0",
+      "dependencies": []
+    },
+    {
+      "name": "vector_math",
+      "version": "2.2.0",
+      "dependencies": []
+    },
+    {
+      "name": "meta",
+      "version": "1.17.0",
+      "dependencies": []
+    },
+    {
+      "name": "material_color_utilities",
+      "version": "0.13.0",
+      "dependencies": [
+        "collection"
+      ]
+    },
+    {
+      "name": "collection",
+      "version": "1.19.1",
+      "dependencies": []
+    },
+    {
+      "name": "characters",
+      "version": "1.4.1",
+      "dependencies": []
+    }
+  ],
+  "configVersion": 1
+}

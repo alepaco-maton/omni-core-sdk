@@ -1,0 +1,22 @@
+name: omni_mdm_android
+description: Implementación Android del plugin omni_mdm.
+version: 0.1.0-m0
+publish_to: none
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  omni_mdm_platform_interface:
+    path: ../omni_mdm_platform_interface
+
+flutter:
+  plugin:
+    implements: omni_mdm
+    platforms:
+      android:
+        package: com.omnimdm.omni_mdm
+        pluginClass: OmniMdmPlugin

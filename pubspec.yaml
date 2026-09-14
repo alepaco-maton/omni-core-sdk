@@ -1,0 +1,13 @@
+name: omni_mdm_workspace
+publish_to: none
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+workspace:
+  - omni_mdm_core
+  - omni_mdm_platform_interface
+  - omni_mdm
+  - omni_mdm_android
+  - omni_mdm_ios
+  - example

@@ -1,0 +1,37 @@
+name: omni_mdm
+description: SDK Flutter Omni MDM — gobernanza de app y observabilidad de flujos.
+version: 0.1.0-m0
+publish_to: none
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.16.0
+  omni_mdm_core:
+    path: ../omni_mdm_core
+  omni_mdm_platform_interface:
+    path: ../omni_mdm_platform_interface
+  omni_mdm_android:
+    path: ../omni_mdm_android
+  omni_mdm_ios:
+    path: ../omni_mdm_ios
+  flutter_secure_storage: ^10.2.0
+  uuid: ^4.5.1
+  mqtt_client: ^10.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  mocktail: ^1.0.4
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        default_package: omni_mdm_android
+      ios:
+        default_package: omni_mdm_ios
