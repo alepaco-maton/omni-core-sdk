@@ -2,8 +2,8 @@ import 'dart:io';
 
 /// Configuración mínima de integración.
 class OmniMdmConfig {
-  /// Endpoint público de producción (Let's Encrypt). No usar IP ni DNS desde Docker.
-  static const String productionEndpoint = 'https://mdm.stamina.ia.bo';
+  /// Endpoint público: subdominio + puerto del firewall. No 80/443. No usar desde Docker.
+  static const String productionEndpoint = 'https://mdm.stamina.ia.bo:19080';
 
   const OmniMdmConfig({
     required this.appKey,
