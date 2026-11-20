@@ -14,11 +14,15 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
+import com.omnimdm.omni_mdm.capture.AppUiCapture
+import com.omnimdm.omni_mdm.sync.ExecutedCommandsStore
 import com.omnimdm.omni_mdm.sync.HostBatchBridge
 import com.omnimdm.omni_mdm.sync.PluginEventStore
 import com.omnimdm.omni_mdm.sync.SyncEngine
 import com.omnimdm.omni_mdm.sync.SyncScheduler
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
 import org.json.JSONObject
@@ -28,10 +32,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-class OmniMdmPlugin : FlutterPlugin {
+class OmniMdmPlugin : FlutterPlugin, ActivityAware {
     private lateinit var channel: MethodChannel
     private lateinit var appContext: android.content.Context
     private var scheduler: SyncScheduler? = null
+    private var activityBinding: ActivityPluginBinding? = null
     private val main = Handler(Looper.getMainLooper())
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -77,6 +82,45 @@ class OmniMdmPlugin : FlutterPlugin {
                         main.post { result.success(null) }
                     }
                 }
+                "commandAlreadyDone" -> {
+                    val id = call.argument<String>("command_id").orEmpty()
+                    result.success(ExecutedCommandsStore.get(appContext).alreadyDone(id))
+                }
+                "markCommandExecuted" -> {
+                    val id = call.argument<String>("command_id").orEmpty()
+                    val key = call.argument<String>("command_key").orEmpty()
+                    val transport = call.argument<String>("transport") ?: "mqtt"
+                    ExecutedCommandsStore.get(appContext).mark(id, key, transport)
+                    result.success(null)
+                }
+                "captureAppUi" -> {
+                    thread {
+                        val quality = (call.argument<Number>("quality")?.toInt() ?: 70)
+                        val maxEdge = (call.argument<Number>("max_edge")?.toInt() ?: 1280)
+                        val commandId = call.argument<String>("command_id").orEmpty()
+                        val store = ExecutedCommandsStore.get(appContext)
+                        if (commandId.isNotBlank() && store.alreadyDone(commandId)) {
+                            main.post {
+                                result.success(
+                                    mapOf(
+                                        "ok" to true,
+                                        "idempotent" to true,
+                                        "transport" to "mqtt",
+                                    ),
+                                )
+                            }
+                            return@thread
+                        }
+                        val activity = activityBinding?.activity
+                        val captured = AppUiCapture.capture(activity, quality, maxEdge)
+                        captured.put("transport", "mqtt")
+                        if (captured.optBoolean("ok", false) && commandId.isNotBlank()) {
+                            store.mark(commandId, "CAPTURE_APP_UI", "mqtt")
+                        }
+                        val out = jsonToMap(captured)
+                        main.post { result.success(out) }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -85,6 +129,36 @@ class OmniMdmPlugin : FlutterPlugin {
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
         SyncEngine.get(appContext).host = null
+    }
+
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activityBinding = binding
+        SyncEngine.get(appContext).actions().attachActivity(binding.activity)
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        activityBinding = null
+        SyncEngine.get(appContext).actions().attachActivity(null)
+    }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activityBinding = binding
+        SyncEngine.get(appContext).actions().attachActivity(binding.activity)
+    }
+
+    override fun onDetachedFromActivity() {
+        activityBinding = null
+        SyncEngine.get(appContext).actions().attachActivity(null)
+    }
+
+    private fun jsonToMap(o: JSONObject): Map<String, Any?> {
+        val out = linkedMapOf<String, Any?>()
+        val keys = o.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            out[k] = o.opt(k)
+        }
+        return out
     }
 
     @Suppress("UNCHECKED_CAST")

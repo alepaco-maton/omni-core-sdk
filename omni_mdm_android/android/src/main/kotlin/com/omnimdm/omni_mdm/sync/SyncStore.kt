@@ -34,12 +34,38 @@ internal class SyncStore(context: Context) {
     fun overwriteSettings(intervalSec: Int, batchMax: Int, rawJson: String) {
         val interval = intervalSec.coerceIn(60, 3600)
         val batch = batchMax.coerceIn(10, 500)
-        sp.edit()
+        val edit = sp.edit()
             .putInt(KEY_INTERVAL, interval)
             .putInt(KEY_BATCH, batch)
             .putString(KEY_SETTINGS_JSON, rawJson)
-            .apply()
+        try {
+            val o = JSONObject(rawJson)
+            edit.putBoolean(KEY_CAPTURE_APP_UI, o.optBoolean("capture_app_ui_enabled", true))
+            edit.putInt(KEY_ACTION_POLL, o.optInt("action_poll_sec", 90).coerceIn(10, 300))
+            edit.putInt(KEY_ACTION_POLL_ACTIVE, o.optInt("action_poll_active_sec", 20).coerceIn(10, 120))
+            edit.putBoolean(KEY_LOCATION_ENABLED, o.optBoolean("location_enabled", true))
+            edit.putInt(KEY_LOCATION_TIMEOUT, o.optInt("location_timeout_ms", 15000).coerceIn(3000, 60000))
+            edit.putInt(KEY_LOCATION_MAX_AGE, o.optInt("location_max_age_ms", 60000).coerceIn(5000, 600000))
+        } catch (_: Exception) {
+        }
+        edit.apply()
     }
+
+    fun captureAppUiEnabled(): Boolean = sp.getBoolean(KEY_CAPTURE_APP_UI, true)
+    fun actionPollSec(): Int = sp.getInt(KEY_ACTION_POLL, 90).coerceIn(10, 300)
+    fun actionPollActiveSec(): Int = sp.getInt(KEY_ACTION_POLL_ACTIVE, 20).coerceIn(10, 120)
+
+    fun boostActionPoll(forMs: Long) {
+        sp.edit().putLong(KEY_ACTION_BOOST_UNTIL, System.currentTimeMillis() + forMs).apply()
+    }
+
+    fun effectiveActionPollSec(): Int {
+        val until = sp.getLong(KEY_ACTION_BOOST_UNTIL, 0L)
+        return if (until > System.currentTimeMillis()) actionPollActiveSec() else actionPollSec()
+    }
+    fun locationEnabled(): Boolean = sp.getBoolean(KEY_LOCATION_ENABLED, false)
+    fun locationTimeoutMs(): Int = sp.getInt(KEY_LOCATION_TIMEOUT, 15000).coerceIn(3000, 60000)
+    fun locationMaxAgeMs(): Int = sp.getInt(KEY_LOCATION_MAX_AGE, 60000).coerceIn(5000, 600000)
 
     fun endpoint(): String = sp.getString(KEY_ENDPOINT, "").orEmpty()
     fun appKey(): String = sp.getString(KEY_APP_KEY, "").orEmpty()
@@ -113,5 +139,12 @@ internal class SyncStore(context: Context) {
         private const val KEY_SETTINGS_JSON = "settings_json"
         private const val KEY_FAILS = "fail_count"
         private const val KEY_OPEN_UNTIL = "cb_open_until"
+        private const val KEY_CAPTURE_APP_UI = "capture_app_ui_enabled"
+        private const val KEY_ACTION_POLL = "action_poll_sec"
+        private const val KEY_ACTION_POLL_ACTIVE = "action_poll_active_sec"
+        private const val KEY_ACTION_BOOST_UNTIL = "action_poll_boost_until"
+        private const val KEY_LOCATION_ENABLED = "location_enabled"
+        private const val KEY_LOCATION_TIMEOUT = "location_timeout_ms"
+        private const val KEY_LOCATION_MAX_AGE = "location_max_age_ms"
     }
 }

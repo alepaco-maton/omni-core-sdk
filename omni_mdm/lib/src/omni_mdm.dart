@@ -117,6 +117,16 @@ abstract final class OmniMdm {
         _commandDispatcher = CommandDispatcher(_mqttClient!, capabilities);
         onCommandSucceeded = _onCommandSucceeded;
         _installCrashHooks();
+      } else if (config.mqttCommandsEnabled) {
+        // syncOnly + commandsMqtt: audit HTTP + canal MQTT solo comandos (C).
+        _mqttClient = OmniMqttClient(config, _session);
+        _commandDispatcher = CommandDispatcher(_mqttClient!, capabilities);
+        onCommandSucceeded = _onCommandSucceeded;
+        _flowClient = null;
+        _telemetryClient = null;
+        _crashReporter = null;
+        _observabilityClient = null;
+        _flows = null;
       } else {
         _mqttClient = null;
         _flowClient = null;
@@ -142,6 +152,11 @@ abstract final class OmniMdm {
       if (_session.isEnrolled) {
         if (config.syncOnly) {
           unawaited(_pushAuthToNative());
+          if (config.mqttCommandsEnabled) {
+            unawaited(_startCommandsMqttOnly());
+          }
+          // CAPTURE/PING por poll HTTP también en syncOnly (además del SyncScheduler nativo).
+          unawaited(_startSyncOnlyActionPoll());
         } else {
           unawaited(_startDeviceServices());
           unawaited(_reportStartupInventory());
@@ -152,7 +167,7 @@ abstract final class OmniMdm {
       if (kDebugMode) {
         debugPrint(
           '[omni_mdm] initialized endpoint=${config.endpoint} '
-          'syncOnly=${config.syncOnly} '
+          'syncOnly=${config.syncOnly} commandsMqtt=${config.commandsMqtt} '
           'enrolled=${_session.isEnrolled} expires=${_session.tokenExpiresAt}',
         );
       }
@@ -250,6 +265,7 @@ abstract final class OmniMdm {
         'error=${_mqttClient?.lastError}',
       );
     }
+    await _reportMqttStatus(mqttOk, mqttOk ? null : _mqttClient?.lastError);
     await _commandDispatcher?.start();
     await _publishManifest();
     unawaited(_telemetryClient?.sendHeartbeat());
@@ -257,16 +273,64 @@ abstract final class OmniMdm {
 
   /// Fuerza (re)conexión MQTT — útil desde pantalla de configuración.
   static Future<bool> connectMqtt() async {
-    if (!_initialized || _config?.syncOnly == true) return false;
+    final cfg = _config;
+    if (!_initialized || cfg == null || !cfg.mqttCommandsEnabled) return false;
     if (!_session.isEnrolled) {
       final enrolled = await refreshInstanceToken(force: true);
       if (!enrolled) return false;
     }
     final ok = await _mqttClient?.ensureConnected() ?? false;
+    await _reportMqttStatus(ok, ok ? null : _mqttClient?.lastError);
     if (ok) {
       unawaited(_commandDispatcher?.start());
     }
     return ok;
+  }
+
+  /// MQTT solo comandos (syncOnly + commandsMqtt). Fail-open total.
+  static Future<void> _startCommandsMqttOnly() async {
+    try {
+      final ok = await _mqttClient?.ensureConnected() ?? false;
+      if (kDebugMode) {
+        debugPrint(
+          '[omni_mdm] commandsMqtt ensureConnected=$ok error=${_mqttClient?.lastError}',
+        );
+      }
+      await _reportMqttStatus(ok, ok ? null : _mqttClient?.lastError);
+      if (ok) await _commandDispatcher?.start();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[omni_mdm] commandsMqtt fail-open: $e');
+      }
+      try {
+        await _reportMqttStatus(false, e.toString());
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> _reportMqttStatus(bool connected, String? error) async {
+    final cfg = _config;
+    final token = _session.instanceToken;
+    if (cfg == null || token == null || token.isEmpty) return;
+    try {
+      final uri = Uri.parse('${cfg.endpoint}/v1/sdk/mqtt-status');
+      final client = OmniMdmConfig.createHttpClient();
+      try {
+        final req = await client.postUrl(uri);
+        req.headers.set('Content-Type', 'application/json');
+        req.headers.set('Authorization', 'Bearer $token');
+        cfg.applyTunnelHeaders(req);
+        req.add(utf8.encode(jsonEncode({
+          'connected': connected,
+          if (error != null && error.isNotEmpty) 'error': error,
+        })));
+        await req.close();
+      } finally {
+        client.close(force: true);
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[omni_mdm] mqtt-status report fail-open: $e');
+    }
   }
 
   static Future<void> _onCommandSucceeded(
@@ -456,16 +520,22 @@ abstract final class OmniMdm {
       ingestAuditEvents([event]);
 
   /// INSERT local en la tabla del plugin. El table-sync (Kotlin) sube el lote.
+  ///
+  /// [queueBeforeInit]: la cola es un SQLite local del plugin; no necesita sesión.
+  /// Sirve para no perder eventos de arranque mientras `initialize` corre.
   static Future<void> logEvent({
+    String? id,
     required String type,
     required String name,
     Map<String, dynamic> payload = const {},
+    DateTime? observedAt,
+    bool queueBeforeInit = false,
   }) async {
-    if (!_initialized) return;
+    if (!_initialized && !queueBeforeInit) return;
     try {
       await OmniTableSync.enqueuePluginEvent(
-        id: const Uuid().v4(),
-        createdAt: DateTime.now().toUtc().toIso8601String(),
+        id: id ?? const Uuid().v4(),
+        createdAt: (observedAt ?? DateTime.now()).toUtc().toIso8601String(),
         eventType: type,
         eventAction: name,
         payloadJson: jsonEncode(payload),
@@ -594,6 +664,15 @@ abstract final class OmniMdm {
     unawaited(_pollRemoteActions());
   }
 
+  /// Poll de `sdk_actions` cuando boa_app corre con syncOnly (CAPTURE_APP_UI).
+  static Future<void> _startSyncOnlyActionPoll() async {
+    _actionPoll?.cancel();
+    _actionPoll = Timer.periodic(const Duration(seconds: 20), (_) {
+      unawaited(_pollRemoteActions());
+    });
+    unawaited(_pollRemoteActions());
+  }
+
   static Future<void> _pollRemoteActions() async {
     final cfg = _config;
     final token = _session.instanceToken;
@@ -617,8 +696,24 @@ abstract final class OmniMdm {
         final params = raw['params'] is Map
             ? Map<String, dynamic>.from(raw['params'] as Map)
             : <String, dynamic>{};
-        final handler = _actions[key];
         if (id.isEmpty) continue;
+        // Preferir capacidades built-in (CAPTURE_APP_UI, PING, …) luego host actions.
+        if (capabilities.supports(key)) {
+          final capRes = await capabilities.execute(key, {
+            ...params,
+            'command_id': params['command_id'] ?? id,
+          });
+          await capRes.when(
+            ok: (value) => _completeRemoteAction(cfg, token, id, 'succeeded', value),
+            fail: (err) => _completeRemoteAction(cfg, token, id, 'failed', {
+              'code': err.code,
+              'message': err.message,
+              'error': err.code,
+            }),
+          );
+          continue;
+        }
+        final handler = _actions[key] ?? _actions[key.toLowerCase()];
         if (handler == null) {
           await _completeRemoteAction(cfg, token, id, 'failed', {
             'error': 'action_not_registered',

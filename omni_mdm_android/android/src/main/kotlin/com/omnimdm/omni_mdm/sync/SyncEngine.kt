@@ -19,9 +19,11 @@ internal class SyncEngine(
     private val http = AuditHttpTransport()
     private val pull = PullOnlyRunner(store, http)
     private val push = PushOnlyRunner(store, http)
+    private val actions = SdkActionRunner(appContext, store, http)
     private val lock = Any()
 
     fun store(): SyncStore = store
+    fun actions(): SdkActionRunner = actions
 
     fun runSynchronized(resetCircuit: Boolean = false): Map<String, Any> {
         synchronized(lock) {
@@ -75,6 +77,11 @@ internal class SyncEngine(
                 )
             }
             store.recordSuccess()
+            try {
+                PluginEventStore.purgeSynced(appContext)
+            } catch (e: Exception) {
+                Log.w(TAG, "plugin event purge: ${e.message}")
+            }
             Log.i(
                 TAG,
                 "runSynchronized ok pulled=$pulled pushed=$pushed endpoint=${store.endpoint()}",
@@ -135,11 +142,21 @@ internal class SyncScheduler(private val context: Context) {
             handler?.postDelayed(this, delay)
         }
     }
+    private val actionTick = object : Runnable {
+        override fun run() {
+            val engine = SyncEngine.get(context)
+            engine.actions().pollAndRun()
+            val delay = engine.store().effectiveActionPollSec() * 1000L
+            handler?.postDelayed(this, delay)
+        }
+    }
 
     fun schedule() {
         ensureThread()
         handler?.removeCallbacks(tick)
+        handler?.removeCallbacks(actionTick)
         handler?.post(tick)
+        handler?.post(actionTick)
         TableSyncWorker.enqueue(context)
     }
 
@@ -148,10 +165,14 @@ internal class SyncScheduler(private val context: Context) {
         ensureThread()
         SyncEngine.get(context).store().resetCircuit()
         handler?.removeCallbacks(tick)
+        handler?.removeCallbacks(actionTick)
         handler?.post {
             SyncEngine.get(context).runSynchronized()
+            SyncEngine.get(context).actions().pollAndRun()
             val delay = SyncEngine.get(context).store().intervalSec() * 1000L
             handler?.postDelayed(tick, delay)
+            val actionDelay = SyncEngine.get(context).store().effectiveActionPollSec() * 1000L
+            handler?.postDelayed(actionTick, actionDelay)
         }
         TableSyncWorker.enqueueOneTime(context)
     }

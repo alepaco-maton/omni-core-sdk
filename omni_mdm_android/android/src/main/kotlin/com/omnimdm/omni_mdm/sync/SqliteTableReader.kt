@@ -110,17 +110,24 @@ internal object SqliteTableReader {
     }
 
     private fun mapPluginEvent(c: Cursor, deviceId: String, rowId: String): JSONObject {
-        val metadata = try {
+        val payload = try {
             JSONObject(c.string("payload") ?: "{}")
         } catch (_: Exception) {
             JSONObject()
         }
+        val metadata = payload.optJSONObject("metadata") ?: JSONObject()
         return JSONObject().apply {
             put("client_event_id", rowId)
             put("device_id", deviceId)
             put("observed_at", c.string("created_at") ?: "")
             put("event_type", c.string("event_type") ?: "custom")
             put("event_action", c.string("event_action") ?: "log")
+            putOpt("screen_name", payload.optString("screen_name").ifBlank { null })
+            putOpt("endpoint", payload.optString("endpoint").ifBlank { null })
+            putOpt("user_name", payload.optString("user_name").ifBlank { null })
+            putOpt("ip_address", payload.optString("ip_address").ifBlank { null })
+            putOpt("json_request", payload.optString("json_request").ifBlank { null })
+            putOpt("json_response", payload.optString("json_response").ifBlank { null })
             if (metadata.length() > 0) put("metadata", metadata)
         }
     }

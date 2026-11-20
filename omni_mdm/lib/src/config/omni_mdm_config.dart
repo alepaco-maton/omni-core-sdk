@@ -11,6 +11,7 @@ class OmniMdmConfig {
     this.appSecret,
     this.mqttUrl,
     this.syncOnly = false,
+    this.commandsMqtt = false,
     this.syncIntervalSec = 300,
     this.tunnelAccessToken,
     this.enrollmentTokenProvider,
@@ -20,12 +21,20 @@ class OmniMdmConfig {
   final String endpoint;
   final String? appSecret;
 
-  /// URL MQTT opcional (ej. `mqtt://10.0.2.2:11883`). Si se define, la telemetría
-  /// se publica en `omni/{businessId}/{instanceId}/telemetry`.
+  /// URL MQTT: local `mqtt://192.168.x.x:11883` o público `wss://mdm…:18085/mqtt`.
   final String? mqttUrl;
 
-  /// Solo enroll + table-sync HTTP (sin MQTT, comandos, telemetría ni poll de acciones).
+  /// Solo enroll + table-sync HTTP (sin telemetría MQTT completa).
   final bool syncOnly;
+
+  /// Con [syncOnly]: activa MQTT **solo** para comandos (opción C), sin telemetría.
+  /// Requiere [mqttUrl]. El poll HTTP de acciones sigue activo (F) con anti-duplicado.
+  final bool commandsMqtt;
+
+  bool get mqttCommandsEnabled =>
+      mqttUrl != null &&
+      mqttUrl!.trim().isNotEmpty &&
+      (!syncOnly || commandsMqtt);
 
   /// Intervalo de sync local en segundos (60–3600). El servidor puede sobreescribir vía settings.
   final int syncIntervalSec;

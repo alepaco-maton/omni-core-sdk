@@ -1,5 +1,6 @@
 import 'package:omni_mdm_core/omni_mdm_core.dart';
 
+import 'builtin/capture_app_ui_capability.dart';
 import 'builtin/device_info_capability.dart';
 import 'builtin/lock_app_ui_capability.dart';
 import 'builtin/ping_capability.dart';
@@ -16,6 +17,7 @@ class CapabilityRegistry {
       const ReloadConfigCapability(),
       const LockAppUiCapability(),
       const UnlockAppUiCapability(),
+      const CaptureAppUiCapability(),
     ]);
   }
 

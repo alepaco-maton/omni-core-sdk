@@ -1,16 +1,20 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
+
 import '../mqtt/omni_mqtt_client.dart';
 import '../capabilities/capability_registry.dart';
 import 'command_hooks.dart';
 
 /// Recibe comandos MQTT, ejecuta capacidades y publica ACK/resultado.
+/// Idempotencia compartida con poll HTTP nativo vía MethodChannel.
 class CommandDispatcher {
   CommandDispatcher(this._mqtt, this._registry);
 
   final OmniMqttClient _mqtt;
   final CapabilityRegistry _registry;
   final Set<String> _executed = {};
+  static const _channel = MethodChannel('omni_mdm');
 
   Future<void> start() async {
     if (!await _mqtt.ensureConnected()) return;
@@ -44,12 +48,38 @@ class CommandDispatcher {
     }
   }
 
+  Future<bool> _alreadyDone(String commandId) async {
+    if (_executed.contains(commandId)) return true;
+    try {
+      final v = await _channel.invokeMethod<bool>('commandAlreadyDone', {
+        'command_id': commandId,
+      });
+      return v == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _markDone(String commandId, String capability) async {
+    _executed.add(commandId);
+    try {
+      await _channel.invokeMethod<void>('markCommandExecuted', {
+        'command_id': commandId,
+        'command_key': capability,
+        'transport': 'mqtt',
+      });
+    } catch (_) {}
+  }
+
   Future<void> _handleCommand(Map<String, dynamic> body) async {
     final commandId = body['command_id']?.toString();
     final capability = (body['capability'] ?? body['command_key'])?.toString();
     if (commandId == null || capability == null) return;
-    if (_executed.contains(commandId)) {
-      await _publishResult(commandId, 'succeeded', result: {'idempotent': true});
+    if (await _alreadyDone(commandId)) {
+      await _publishResult(commandId, 'succeeded', result: {
+        'idempotent': true,
+        'transport': 'mqtt',
+      });
       return;
     }
 
@@ -59,18 +89,23 @@ class CommandDispatcher {
     final params = body['params'] is Map
         ? Map<String, dynamic>.from(body['params'] as Map)
         : <String, dynamic>{};
+    params['command_id'] = commandId;
 
     if (capability == 'PUBLISH_MANIFEST') {
       await publishManifest();
-      _executed.add(commandId);
-      await _publishResult(commandId, 'succeeded', result: {'published': true});
+      await _markDone(commandId, capability);
+      await _publishResult(commandId, 'succeeded', result: {
+        'published': true,
+        'transport': 'mqtt',
+      });
       return;
     }
 
     final res = await _registry.execute(capability, params);
-    _executed.add(commandId);
     if (res.isOk) {
+      await _markDone(commandId, capability);
       final value = res.when(ok: (v) => v, fail: (_) => <String, dynamic>{});
+      value['transport'] = value['transport'] ?? 'mqtt';
       await _publishResult(commandId, 'succeeded', result: value);
       final hook = onCommandSucceeded;
       if (hook != null) {
